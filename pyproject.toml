@@ -10,6 +10,7 @@ dependencies = [
     "mutagen",
     "curl-cffi",
     "watchfiles",
+    "yt-dlp-danmaku",
 ]
 
 [dependency-groups]

@@ -416,7 +416,8 @@ class DownloadQueue:
             'no_color': True,
             'extract_flat': True,
             'ignore_no_formats_error': True,
-            'noplaylist': True,
+            # Removed 'noplaylist': True to allow playlist detection (e.g., Bilibili multi-part videos)
+            # This enables OUTPUT_TEMPLATE_PLAYLIST to work correctly
             'paths': {"home": self.config.DOWNLOAD_DIR, "temp": self.config.TEMP_DIR},
             **self.config.YTDL_OPTIONS,
             **({'impersonate': yt_dlp.networking.impersonate.ImpersonateTarget.from_str(self.config.YTDL_OPTIONS['impersonate'])} if 'impersonate' in self.config.YTDL_OPTIONS else {}),
@@ -494,9 +495,11 @@ class DownloadQueue:
             if playlist_item_limit > 0:
                 log.info(f'Playlist item limit is set. Processing only first {playlist_item_limit} entries')
                 entries = entries[:playlist_item_limit]
+            # Get playlist id safely - use 'id', 'playlist_id', or extract from url
+            playlist_id = entry.get("id") or entry.get("playlist_id") or entry.get("webpage_url", "").split("/")[-1] or "unknown_playlist"
             for index, etr in enumerate(entries, start=1):
                 etr["_type"] = "video"
-                etr["playlist"] = entry["id"]
+                etr["playlist"] = playlist_id
                 etr["playlist_index"] = '{{0:0{0:d}d}}'.format(playlist_index_digits).format(index)
                 for property in ("id", "title", "uploader", "uploader_id"):
                     if property in entry:
@@ -507,9 +510,23 @@ class DownloadQueue:
             return {'status': 'ok'}
         elif etype == 'video' or (etype.startswith('url') and 'id' in entry and 'title' in entry):
             log.debug('Processing as a video')
-            key = entry.get('webpage_url') or entry['url']
+            key = entry.get('webpage_url') or entry.get('url')
+            if not key:
+                return {'status': 'error', 'msg': 'Entry has no url or webpage_url'}
+
+            if 'playlist' not in entry and self.done.exists(key):
+                prev_dl = self.done.get(key)
+                if hasattr(prev_dl.info, 'entry') and isinstance(prev_dl.info.entry, dict):
+                    log.info(f"Recovering playlist info from previous download for {key}")
+                    for k, v in prev_dl.info.entry.items():
+                        if k.startswith('playlist'):
+                            entry[k] = v
+
             if not self.queue.exists(key):
-                dl = DownloadInfo(entry['id'], entry.get('title') or entry['id'], key, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template)
+                # Get id safely - use 'id', extract from url, or use key as fallback
+                entry_id = entry.get('id') or key.split('/')[-1].split('?')[0] or key
+                entry_title = entry.get('title') or entry_id
+                dl = DownloadInfo(entry_id, entry_title, key, quality, format, folder, custom_name_prefix, error, entry, playlist_item_limit, split_by_chapters, chapter_template)
                 await self.__add_download(dl, auto_start)
             return {'status': 'ok'}
         return {'status': 'error', 'msg': f'Unsupported resource "{etype}"'}
